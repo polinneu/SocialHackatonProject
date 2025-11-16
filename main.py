@@ -314,8 +314,12 @@ def edit_text(user_text: str, style_prompt: str = "", org_info: str = "", projec
 {use_style}
 
 Теперь на основе этого стиля."""
-    answer = ask_ai(prompt)
-    return answer
+    
+    try:
+        answer = ask_ai(prompt)
+        return answer
+    except Exception as e:
+        return f"❌ Ошибка при редактировании текста: {str(e)}\n\nИсходный текст:\n{user_text}"
 
 
 def make_plan(qa_text: str, style_prompt: str = "", org_info: str = "", projects_info: str = "") -> str:
@@ -520,7 +524,7 @@ logging.basicConfig(
     ORG_PROFILE_EDIT_DESCRIPTION,
     ETHICAL_REPLACE_CONFIRM,
     POST_TEXT_IMAGE_OFFER,
-) = range(32)
+) = range(32) 
 
 BOT_TOKEN = "8378449608:AAF4XLIdbWzB439JabmDTSBh92emMPcF44I"
 
@@ -1149,35 +1153,45 @@ class RegistrationBot:
     async def ask_next_struct_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         idx = context.user_data.get("structured_question_index", 0)
         struct_data = context.user_data.get("structured_form_data", {})
-
+    
         if idx >= len(STRUCT_QUESTIONS):
-            lines = []
-            for key, question in STRUCT_QUESTIONS:
-                answer = struct_data.get(key)
-                if answer:
-                    lines.append(f"{question} {answer}")
-            qa_text = "\n".join(lines)
-
-            user = update.effective_user
-            style_prompt = self.get_style_prompt_for_user(user.id)
-            org_info = self.get_org_info_for_user(user.id)
-            projects_info = self.get_projects_info_for_user(user.id)
-
-            post_text = await run_gigachat(
-                generate_post_from_structured_form,
-                qa_text,
-                style_prompt=style_prompt,
-                org_info=org_info,
-                projects_info=projects_info,
-            )
-
-            context.user_data["last_post_text"] = post_text
-            context.user_data["last_post_source"] = "structured"
-
-            context.user_data.pop("structured_form_data", None)
-            context.user_data.pop("structured_question_index", None)
-
-            return await self.send_text_with_ethical_check(update, context, post_text, followup_type="post")
+            # Показываем статус генерации
+            status_msg = await update.message.reply_text("🔄 Генерирую текст поста...")
+            
+            try:
+                lines = []
+                for key, question in STRUCT_QUESTIONS:
+                    answer = struct_data.get(key)
+                    if answer:
+                        lines.append(f"{question} {answer}")
+                qa_text = "\n".join(lines)
+    
+                user = update.effective_user
+                style_prompt = self.get_style_prompt_for_user(user.id)
+                org_info = self.get_org_info_for_user(user.id)
+                projects_info = self.get_projects_info_for_user(user.id)
+    
+                post_text = await run_gigachat(
+                    _post_from_structured_form,
+                    qa_text,
+                    style_prompt=style_prompt,
+                    org_info=org_info,
+                    projects_info=projects_info,
+                )
+    
+                context.user_data["last_post_text"] = post_text
+                context.user_data["last_post_source"] = "structured"
+    
+                context.user_data.pop("structured_form_data", None)
+                context.user_data.pop("structured_question_index", None)
+    
+                await status_msg.delete()
+                return await self.send_text_with_ethical_check(update, context, post_text, followup_type="post")
+            
+            except Exception as e:
+                await status_msg.delete()
+                await update.message.reply_text(f"❌ Ошибка при генерации поста: {str(e)}")
+                return await self.start(update, context)
 
         _, question = STRUCT_QUESTIONS[idx]
         keyboard = [["✍️ Ответить", "⏭ Пропустить"], ["🔙 В главное меню"]]
@@ -1217,16 +1231,89 @@ class RegistrationBot:
         text = update.message.text
         struct_data = context.user_data.get("structured_form_data", {})
         idx = context.user_data.get("structured_question_index", 0)
-
+    
         if idx >= len(STRUCT_QUESTIONS):
             return await self.start(update, context)
-
+    
         key, _ = STRUCT_QUESTIONS[idx]
         struct_data[key] = text
         context.user_data["structured_form_data"] = struct_data
         context.user_data["structured_question_index"] = idx + 1
+    
+        # Показываем статус генерации
+        status_msg = await update.message.reply_text("🔄 Генерирую текст поста...")
+    
+        try:
+            # Получаем данные для генерации
+            idx = context.user_data.get("structured_question_index", 0)
+            if idx >= len(STRUCT_QUESTIONS):
+                lines = []
+                for key, question in STRUCT_QUESTIONS:
+                    answer = struct_data.get(key)
+                    if answer:
+                        lines.append(f"{question} {answer}")
+                qa_text = "\n".join(lines)
+    
+                user = update.effective_user
+                style_prompt = self.get_style_prompt_for_user(user.id)
+                org_info = self.get_org_info_for_user(user.id)
+                projects_info = self.get_projects_info_for_user(user.id)
+    
+                # Генерируем пост асинхронно
+                post_text = await run_gigachat(
+                    _post_from_structured_form,
+                    qa_text,
+                    style_prompt=style_prompt,
+                    org_info=org_info,
+                    projects_info=projects_info,
+                )
+    
+                context.user_data["last_post_text"] = post_text
+                context.user_data["last_post_source"] = "structured"
+    
+                context.user_data.pop("structured_form_data", None)
+                context.user_data.pop("structured_question_index", None)
+    
+                # Удаляем статус и отправляем результат
+                await status_msg.delete()
+                return await self.send_text_with_ethical_check(update, context, post_text, followup_type="post")
+            else:
+                await status_msg.delete()
+                return await self.ask_next_struct_question(update, context)
+    
+        except Exception as e:
+            await status_msg.delete()
+            await update.message.reply_text(f"❌ Ошибка при генерации поста: {str(e)}")
+            return await self.start(update, context)
 
-        return await self.ask_next_struct_question(update, context)
+    async def handle_text_editor_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        user_text = update.message.text
+        
+        # Показываем статус
+        status_msg = await update.message.reply_text("🔄 Редактирую текст...")
+    
+        try:
+            style_prompt = self.get_style_prompt_for_user(user.id)
+            org_info = self.get_org_info_for_user(user.id)
+            projects_info = self.get_projects_info_for_user(user.id)
+    
+            # Редактируем текст асинхронно
+            edited = await run_gigachat(
+                edit_text,
+                user_text,
+                style_prompt=style_prompt,
+                org_info=org_info,
+                projects_info=projects_info,
+            )
+            
+            await status_msg.delete()
+            return await self.send_text_with_ethical_check(update, context, edited, followup_type="edit")
+        
+        except Exception as e:
+            await status_msg.delete()
+            await update.message.reply_text(f"❌ Ошибка при редактировании текста: {str(e)}")
+            return await self.start(update, context)
 
     async def handle_post_free_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -2378,13 +2465,11 @@ class RegistrationBot:
         application.add_handler(CommandHandler("reset", self.reset))
         application.add_handler(CommandHandler("cancel", self.cancel))
     async def run(self):
-        """Запуск бота в Jupyter (в уже работающем event loop)."""
     
-        # ВАЖНО: разрешаем обрабатывать несколько апдейтов параллельно
         application = (
             Application.builder()
             .token(self.token)
-            .concurrent_updates(16)   # или другое число рабочих "слотов"
+            .concurrent_updates(16)
             .build()
         )
     
@@ -2407,6 +2492,6 @@ class RegistrationBot:
 async def main():
     bot = RegistrationBot(BOT_TOKEN)
     await bot.run()
+
 bot = RegistrationBot(BOT_TOKEN)
 await bot.run()
-
